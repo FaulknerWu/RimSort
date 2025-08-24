@@ -41,10 +41,12 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMenu,
     QMessageBox,
     QProgressDialog,
@@ -830,6 +832,115 @@ class ModListItemInner(QWidget):
             )
 
 
+class SectionHeaderWidget(QWidget):
+    """Simple, themed header widget used as a named separator in the Active list."""
+    toggle_requested = Signal()
+
+    def __init__(self, title: str) -> None:
+        super().__init__()
+        root = QFrame()
+        root.setObjectName("separator")
+        layout = QGridLayout()
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(6)
+
+        # Triangle button using built-in arrow type for consistent size
+        toggle_btn = QToolButton()
+        try:
+            toggle_btn.setAutoRaise(True)
+        except Exception:
+            pass
+        toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        toggle_btn.setFixedWidth(20)
+        toggle_btn.setToolTip(self.tr("Expand/Collapse section"))
+        try:
+            toggle_btn.setArrowType(Qt.ArrowType.DownArrow)
+        except Exception:
+            pass
+
+        label = QLabel(title or "——")
+        label.setObjectName("sectionTitle")
+        try:
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        except Exception:
+            pass
+
+        layout.addWidget(toggle_btn, 0, 0)
+        layout.addWidget(label, 0, 1)
+        count_label = QLabel("")
+        count_label.setObjectName("sectionCount")
+        try:
+            count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        except Exception:
+            pass
+        layout.addWidget(count_label, 0, 2)
+        try:
+            layout.setColumnStretch(1, 1)
+            layout.setColumnStretch(2, 0)
+        except Exception:
+            pass
+        root.setLayout(layout)
+        try:
+            root.setMinimumHeight(28)
+        except Exception:
+            pass
+
+        outer = QHBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(root)
+        self.setLayout(outer)
+
+        self._frame = root
+        self._label = label
+        self._toggle_btn = toggle_btn
+        self._count_label = count_label
+        self._collapsed = False
+
+        # Forward click as a signal for parent list to handle
+        try:
+            self._toggle_btn.clicked.connect(self.toggle_requested.emit)
+        except Exception:
+            pass
+
+    def set_title(self, title: str) -> None:
+        try:
+            self._label.setText(title or "——")
+        except Exception:
+            for child in self.findChildren(QLabel):
+                child.setText(title or "——")
+                break
+
+    def set_selected(self, selected: bool) -> None:
+        """Optional selection highlight for separators (no-op friendly)."""
+        try:
+            self._frame.setProperty("selected", bool(selected))
+            st = self._frame.style()
+            st.unpolish(self._frame)
+            st.polish(self._frame)
+            self._frame.update()
+        except Exception:
+            if selected:
+                self._frame.setStyleSheet("background-color: rgba(180,180,180,0.25);")
+            else:
+                self._frame.setStyleSheet("")
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Update the triangle icon according to collapsed state."""
+        self._collapsed = bool(collapsed)
+        try:
+            self._toggle_btn.setArrowType(
+                Qt.ArrowType.RightArrow if self._collapsed else Qt.ArrowType.DownArrow
+            )
+        except Exception:
+            self._toggle_btn.setText("▶" if self._collapsed else "▼")
+
+    def set_count(self, count: int) -> None:
+        try:
+            self._count_label.setText(str(int(count)))
+        except Exception:
+            pass
+
+
 class ModListIcons:
     _data_path: Path = AppInfo().theme_data_folder / "default-icons"
     _ludeon_icon_path: str = str(_data_path / "ludeon_icon.png")
@@ -1027,6 +1138,271 @@ class ModListWidget(QListWidget):
         )  # TODO: should we enable items conditionally? For now use all
         logger.debug("Finished ModListW`idget initialization")
 
+    def _sections_file_path(self) -> Path:
+        instance_path = Path(self.settings_controller.settings.current_instance_path)
+        return instance_path / "active_sections.json"
+
+    def _is_section_item(self, item: QListWidgetItem | None) -> bool:
+        if item is None:
+            return False
+        data = item.data(Qt.ItemDataRole.UserRole)
+        return isinstance(data, dict) and data.get("type") == "separator"
+
+    def _collect_mod_uuids_from_view(self) -> list[str]:
+        result: list[str] = []
+        for i in range(self.count()):
+            it = self.item(i)
+            if not it:
+                continue
+            data = it.data(Qt.ItemDataRole.UserRole)
+            if isinstance(data, CustomListWidgetItemMetadata):
+                u = data["uuid"]
+                if u:
+                    result.append(u)
+        return result
+
+    def _find_item_index_by_uuid(self, uuid: str) -> int:
+        """Find the visual row index for a given mod uuid, ignoring separators."""
+        for i in range(self.count()):
+            it = self.item(i)
+            if not it or self._is_section_item(it):
+                continue
+            data = it.data(Qt.ItemDataRole.UserRole)
+            if isinstance(data, CustomListWidgetItemMetadata):
+                if data["uuid"] == uuid:
+                    return i
+            elif isinstance(data, dict):
+                if data.get("uuid") == uuid:
+                    return i
+        return -1
+
+    def _save_sections(self) -> None:
+        if self.list_type != "Active":
+            return
+        try:
+            entries = []
+            for i in range(self.count()):
+                it = self.item(i)
+                if self._is_section_item(it):
+                    data = it.data(Qt.ItemDataRole.UserRole)
+                    assert isinstance(data, dict)
+                    entries.append(
+                        {
+                            "type": "separator",
+                            "id": data.get("id"),
+                            "name": data.get("name", ""),
+                            "index": i,
+                            "collapsed": bool(data.get("collapsed", False)),
+                        }
+                    )
+            payload = {"entries": entries}
+            path = self._sections_file_path()
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), "utf-8")
+        except Exception:
+            logger.exception("Failed to save active sections")
+
+    def _load_sections(self) -> list[dict]:
+        if self.list_type != "Active":
+            return []
+        path = self._sections_file_path()
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text("utf-8"))
+            entries = data.get("entries", [])
+            return [e for e in entries if e.get("type") == "separator"]
+        except Exception:
+            logger.exception("Failed to load active sections file")
+            return []
+
+    def _insert_section_item(self, name: str, sec_id: str | None = None, index: int | None = None, *, collapsed: bool = False) -> None:
+        if self.list_type != "Active":
+            return
+        item = QListWidgetItem()
+        # Allow selecting and dragging separator within Active list only
+        item.setFlags(
+            Qt.ItemFlag.ItemIsEnabled
+            | Qt.ItemFlag.ItemIsSelectable
+            | Qt.ItemFlag.ItemIsDragEnabled
+        )
+        item.setData(
+            Qt.ItemDataRole.UserRole,
+            {
+                "type": "separator",
+                "id": sec_id or f"sec-{datetime.now().timestamp()}",
+                "name": name or "",
+                "collapsed": bool(collapsed),
+            },
+        )
+        widget = SectionHeaderWidget(name)
+        # Ensure the row has visible height based on widget size
+        item.setSizeHint(widget.sizeHint())
+        if index is None or index < 0 or index > self.count():
+            self.addItem(item)
+            self.setItemWidget(item, widget)
+        else:
+            self.insertItem(index, item)
+            self.setItemWidget(item, widget)
+        # Initialize collapsed state and wire up toggle
+        widget.set_collapsed(collapsed)
+        # Capture current item in lambda default to avoid late binding
+        widget.toggle_requested.connect(lambda it=item: self._toggle_section_collapsed(it))
+        self._save_sections()
+        # Initialize count label once inserted
+        try:
+            self._update_section_count_by_row(self.row(item))
+        except Exception:
+            pass
+
+    def add_separator(self, name: str, index: int | None = None) -> None:
+        self._insert_section_item(name=name, sec_id=None, index=index)
+
+    def rename_separator(self, item: QListWidgetItem, new_name: str) -> None:
+        if not self._is_section_item(item):
+            return
+        data = item.data(Qt.ItemDataRole.UserRole)
+        assert isinstance(data, dict)
+        data["name"] = new_name
+        item.setData(Qt.ItemDataRole.UserRole, data)
+        w = self.itemWidget(item)
+        if isinstance(w, SectionHeaderWidget):
+            w.set_title(new_name)
+        self._save_sections()
+
+    def _toggle_section_collapsed(self, item: QListWidgetItem, force: bool | None = None) -> None:
+        if not self._is_section_item(item):
+            return
+        data = item.data(Qt.ItemDataRole.UserRole)
+        assert isinstance(data, dict)
+        current = bool(data.get("collapsed", False))
+        new_state = (not current) if force is None else bool(force)
+        data["collapsed"] = new_state
+        item.setData(Qt.ItemDataRole.UserRole, data)
+        w = self.itemWidget(item)
+        if isinstance(w, SectionHeaderWidget):
+            w.set_collapsed(new_state)
+        # Apply to following items until next separator
+        header_row = self.row(item)
+        self._apply_section_collapse_range(header_row, new_state)
+        self._save_sections()
+
+    def _apply_section_collapse_range(self, header_row: int, collapsed: bool) -> None:
+        for r in range(header_row + 1, self.count()):
+            it = self.item(r)
+            if it is None:
+                continue
+            if self._is_section_item(it):
+                break
+            data = it.data(Qt.ItemDataRole.UserRole)
+            if isinstance(data, dict):
+                data["hidden_by_section"] = collapsed
+                it.setData(Qt.ItemDataRole.UserRole, data)
+            if collapsed:
+                it.setHidden(True)
+                it.setSelected(False)
+            else:
+                show = True
+                if isinstance(data, dict):
+                    if data.get("hidden_by_filter") or data.get("filtered"):
+                        show = False
+                it.setHidden(not show)
+
+        # After visibility change, refresh header counts
+        try:
+            self._update_section_count_by_row(header_row)
+        except Exception:
+            pass
+
+    def _count_mods_under_section(self, header_row: int) -> int:
+        cnt = 0
+        for r in range(header_row + 1, self.count()):
+            it = self.item(r)
+            if it is None:
+                continue
+            if self._is_section_item(it):
+                break
+            cnt += 1
+        return cnt
+
+    def _update_section_count_by_row(self, header_row: int) -> None:
+        it = self.item(header_row)
+        if it is None or not self._is_section_item(it):
+            return
+        w = self.itemWidget(it)
+        if isinstance(w, SectionHeaderWidget):
+            w.set_count(self._count_mods_under_section(header_row))
+
+    def _update_all_section_counts(self) -> None:
+        if self.list_type != "Active":
+            return
+        for r in range(self.count()):
+            it = self.item(r)
+            if it is None or not self._is_section_item(it):
+                continue
+            self._update_section_count_by_row(r)
+
+    def apply_loaded_sections(self) -> None:
+        if self.list_type != "Active":
+            return
+        entries = self._load_sections()
+        for ent in sorted(entries, key=lambda e: int(e.get("index", 0))):
+            idx = int(ent.get("index", 0))
+            idx = max(0, min(idx, self.count()))
+            self._insert_section_item(
+                name=str(ent.get("name") or ""),
+                sec_id=str(ent.get("id") or ""),
+                index=idx,
+                collapsed=bool(ent.get("collapsed", False)),
+            )
+            header_item = self.item(idx)
+            if header_item and self._is_section_item(header_item):
+                data = header_item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(data, dict) and data.get("collapsed"):
+                    self._apply_section_collapse_range(idx, True)
+        # Refresh all counts after loading section headers
+        try:
+            self._update_all_section_counts()
+        except Exception:
+            pass
+
+    def get_separator_entries(self) -> list[dict]:
+        """Return current separator entries with visual index and name.
+
+        Schema: [{"type":"separator","name":str,"index":int}]
+        IDs are not exported; they are local-only.
+        """
+        if self.list_type != "Active":
+            return []
+        out: list[dict] = []
+        for i in range(self.count()):
+            it = self.item(i)
+            if self._is_section_item(it):
+                data = it.data(Qt.ItemDataRole.UserRole)
+                if isinstance(data, dict):
+                    out.append({
+                        "type": "separator",
+                        "name": data.get("name", ""),
+                        "index": i,
+                    })
+        return out
+
+    def apply_separator_entries(self, entries: list[dict]) -> None:
+        """Apply separator entries (name + index) to current list.
+
+        Entries are clamped to valid index range and applied in ascending index order.
+        """
+        if self.list_type != "Active" or not entries:
+            return
+        for ent in sorted(entries, key=lambda e: int(e.get("index", 0))):
+            idx = int(ent.get("index", 0))
+            idx = max(0, min(idx, self.count()))
+            self._insert_section_item(
+                name=str(ent.get("name") or ""),
+                sec_id=None,
+                index=idx,
+                collapsed=bool(ent.get("collapsed", False)),
+            )
+
     def on_selection_changed(
         self, selected: QItemSelection, deselected: QItemSelection
     ) -> None:
@@ -1059,33 +1435,39 @@ class ModListWidget(QListWidget):
 
     def dropEvent(self, event: QDropEvent) -> None:
         super().dropEvent(event)
-        # Find the newly dropped items and convert to CustomListWidgetItem
-        # TODO: Optimize this by only converting the dropped items (Figure out how to get their indexes)
+        # If not Active list, strip out any separator items that were dropped
+        if self.list_type != "Active":
+            for i in reversed(range(self.count())):
+                it = self.item(i)
+                if self._is_section_item(it):
+                    self.takeItem(i)
+            return
+        # Convert dropped mod items to CustomListWidgetItem; keep separators intact
         for i in range(self.count()):
             item = self.item(i)
+            if item is None or self._is_section_item(item):
+                continue
             if not isinstance(item, CustomListWidgetItem):
-                # Convert to CustomListWidgetItem
                 item = CustomListWidgetItem(item)
                 self.replaceItemAtIndex(i, item)
         # Get source widget of dropEvent
         source_widget = event.source()
         # Get the drop action
         drop_action = event.dropAction()
-        # Check if the drop action is MoveAction
+        # Recompute uuid order ignoring separators
         if drop_action == Qt.DropAction.MoveAction:
-            # Get the new indexes of the dropped items
-            new_indexes = [index.row() for index in self.selectedIndexes()]
-            # Get the UUIDs of the dropped items
-            uuids = [
-                item.data(Qt.ItemDataRole.UserRole)["uuid"]
-                for item in self.selectedItems()
-            ]
-            # Insert the UUIDs at the respective new indexes
-            for idx, uuid in zip(new_indexes, uuids):
-                if uuid in self.uuids:  # Remove the uuid if it exists in the list
-                    self.uuids.remove(uuid)
-                # Reinsert uuid at it's new index
-                self.uuids.insert(idx, uuid)
+            self.uuids = self._collect_mod_uuids_from_view()
+        if self.list_type == "Active":
+            # Persist separator positions after any drop
+            self._save_sections()
+            try:
+                self._reapply_all_section_collapses()
+            except Exception:
+                pass
+            try:
+                self._update_all_section_counts()
+            except Exception:
+                pass
         # Update list signal
         logger.debug(
             f"Emitting {self.list_type} list update signal after rows dropped [{self.count()}]"
@@ -1122,6 +1504,49 @@ class ModListWidget(QListWidget):
             pos_local = self.mapFromGlobal(pos)
             # Get the item at the local position
             item = self.itemAt(pos_local)
+            # If clicking on a separator, show a different context menu
+            if self._is_section_item(item):
+                logger.info("USER ACTION: Open right-click separator contextMenu")
+                context_menu = QMenu()
+                rename_act = QAction(self.tr("Rename"))
+                delete_act = QAction(self.tr("Delete"))
+                context_menu.addAction(rename_act)
+                context_menu.addAction(delete_act)
+                action = context_menu.exec_(self.mapToGlobal(pos_local))
+                if action == rename_act:
+                    args, ok = show_dialogue_input(
+                        title=self.tr("Rename separator"),
+                        label=self.tr("Enter a new name:"),
+                    )
+                    if ok:
+                        assert item is not None
+                        self.rename_separator(item, args)
+                elif action == delete_act:
+                    assert item is not None
+                    r = self.row(item)
+                    self.takeItem(r)
+                    # Clear hidden_by_section flags for following items until next separator
+                    for rr in range(r, self.count()):
+                        it2 = self.item(rr)
+                        if it2 is None:
+                            continue
+                        if self._is_section_item(it2):
+                            break
+                        data2 = it2.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(data2, dict):
+                            if data2.get("hidden_by_section"):
+                                data2["hidden_by_section"] = False
+                                it2.setData(Qt.ItemDataRole.UserRole, data2)
+                                if data2.get("hidden_by_filter") or data2.get("filtered"):
+                                    it2.setHidden(True)
+                                else:
+                                    it2.setHidden(False)
+                    self._save_sections()
+                    try:
+                        self._update_all_section_counts()
+                    except Exception:
+                        pass
+                return True
             if not isinstance(item, CustomListWidgetItem):
                 logger.debug("Mod list right-click non-QListWidgetItem")
                 return super().eventFilter(object, event)
@@ -1158,6 +1583,9 @@ class ModListWidget(QListWidget):
 
             # Define our QMenu & QActions
             context_menu = QMenu()
+            # Section actions
+            add_sep_above_action = None
+            add_sep_below_action = None
             # Open folder action
             open_folder_action = None
             # Open URL in browser action
@@ -1203,6 +1631,10 @@ class ModListWidget(QListWidget):
                     # Retrieve metadata
                     mod_metadata = self.metadata_manager.internal_local_metadata[uuid]
                     mod_data_source = mod_metadata.get("data_source")
+                    # Provide add-separator actions for Active list
+                    if self.list_type == "Active":
+                        add_sep_above_action = QAction(self.tr("Add separator above"))
+                        add_sep_below_action = QAction(self.tr("Add separator below"))
                     # Open folder action text
                     open_folder_action = QAction()
                     open_folder_action.setText(self.tr("Open folder"))
@@ -1444,6 +1876,11 @@ class ModListWidget(QListWidget):
                                     )
                         # No SteamDB blacklist options when multiple selected
             # Put together our contextMenu
+            # section actions if available
+            if add_sep_above_action and add_sep_below_action:
+                context_menu.addAction(add_sep_above_action)
+                context_menu.addAction(add_sep_below_action)
+                context_menu.addSeparator()
             if open_folder_action:
                 context_menu.addAction(open_folder_action)
             if change_mod_color_action:
@@ -1518,6 +1955,23 @@ class ModListWidget(QListWidget):
             # Execute QMenu and return it's ACTION
             action = context_menu.exec_(self.mapToGlobal(pos_local))
             if action:  # Handle the action for all selected items
+                # Handle add-separator actions first
+                if add_sep_above_action and action == add_sep_above_action:
+                    args, ok = show_dialogue_input(
+                        title=self.tr("Add separator"),
+                        label=self.tr("Enter a name for the separator:"),
+                    )
+                    if ok:
+                        self.add_separator(args, index=self.row(item))
+                    return True
+                if add_sep_below_action and action == add_sep_below_action:
+                    args, ok = show_dialogue_input(
+                        title=self.tr("Add separator"),
+                        label=self.tr("Enter a name for the separator:"),
+                    )
+                    if ok:
+                        self.add_separator(args, index=self.row(item) + 1)
+                    return True
                 if (  # ACTION: Update git mod(s)
                     action == re_git_action and len(git_paths) > 0
                 ):
@@ -1987,9 +2441,11 @@ class ModListWidget(QListWidget):
 
         :return: List of all modlist items as CustomListWidgetItem
         """
-        mod_list_items = []
+        mod_list_items: list[CustomListWidgetItem] = []
         for index in range(self.count()):
             item = self.item(index)
+            if self._is_section_item(item):
+                continue
             mod_list_items.append(item)
         return mod_list_items
 
@@ -2017,8 +2473,10 @@ class ModListWidget(QListWidget):
         mod_list_items = []
         for index in range(self.count()):
             item = self.item(index)
+            if self._is_section_item(item):
+                continue
             item_data = item.data(Qt.ItemDataRole.UserRole)
-            if item_data["warning_toggled"]:
+            if isinstance(item_data, CustomListWidgetItemMetadata) and item_data["warning_toggled"]:
                 mod_list_items.append(item)
         return mod_list_items
 
@@ -2067,7 +2525,12 @@ class ModListWidget(QListWidget):
         for idx in indexes:
             item = self.item(idx)
             # Check for visible item without a widget set
-            if item and self.check_item_visible(item) and self.itemWidget(item) is None:
+            if (
+                item
+                and not self._is_section_item(item)
+                and self.check_item_visible(item)
+                and self.itemWidget(item) is None
+            ):
                 self.create_widget_for_item(item)
 
     def get_visible_indexes(self) -> set[int]:
@@ -2094,6 +2557,26 @@ class ModListWidget(QListWidget):
             y += rect.height()
 
         return indexes
+
+    def _reapply_all_section_collapses(self) -> None:
+        """Recompute hidden_by_section for all items based on current header states."""
+        if self.list_type != "Active":
+            return
+        for r in range(self.count()):
+            it = self.item(r)
+            if it is None or self._is_section_item(it):
+                continue
+            data = it.data(Qt.ItemDataRole.UserRole)
+            if isinstance(data, dict) and data.get("hidden_by_section"):
+                data["hidden_by_section"] = False
+                it.setData(Qt.ItemDataRole.UserRole, data)
+        for r in range(self.count()):
+            it = self.item(r)
+            if it is None or not self._is_section_item(it):
+                continue
+            data = it.data(Qt.ItemDataRole.UserRole)
+            if isinstance(data, dict) and data.get("collapsed"):
+                self._apply_section_collapse_range(r, True)
 
     def handle_item_data_changed(self, item: CustomListWidgetItem) -> None:
         """
@@ -2151,27 +2634,36 @@ class ModListWidget(QListWidget):
         # already loaded. Each item index corresponds to a UUID index.
         for idx in range(first, last + 1):
             item = self.item(idx)
-            if item:
-                data = item.data(Qt.ItemDataRole.UserRole)
-                if data is None:
-                    logger.debug(f"Attempted to insert item with None data. Idx: {idx}")
-                    continue
-                # Ensure the item's persisted list_type matches the destination list after insertion
-                try:
-                    data["list_type"] = self.list_type
-                    item.setData(Qt.ItemDataRole.UserRole, data)
-                except Exception:
-                    pass
-                uuid = data["uuid"]
-                self.uuids.insert(idx, uuid)
-                self.item_added_signal.emit(uuid)
-        # Update list signal if all items are loaded
-        if len(self.uuids) == self.count():
+            if not item:
+                continue
+            if self._is_section_item(item):
+                continue
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if data is None:
+                logger.debug(f"Attempted to insert item with None data. Idx: {idx}")
+                continue
+            try:
+                data["list_type"] = self.list_type
+                item.setData(Qt.ItemDataRole.UserRole, data)
+            except Exception:
+                pass
+            uuid = data["uuid"]
+            if uuid not in self.uuids:
+                self.uuids.append(uuid)
+            self.item_added_signal.emit(uuid)
+        # Update list signal if all mod items are loaded (ignore separators)
+        if len(self.uuids) == len(self._collect_mod_uuids_from_view()):
             # Update list with the number of items
             logger.debug(
                 f"Emitting {self.list_type} list update signal after rows inserted [{self.count()}]"
             )
             self.list_update_signal.emit(str(self.count()))
+        # Keep collapsed sections enforced for Active list
+        if self.list_type == "Active":
+            try:
+                self._reapply_all_section_collapses()
+            except Exception:
+                pass
 
     def handle_rows_removed(self, parent: QModelIndex, first: int, last: int) -> None:
         """
@@ -2191,12 +2683,17 @@ class ModListWidget(QListWidget):
         :param last: index of last item removed (not used)
         """
         # Update list signal if all items are loaded
-        if len(self.uuids) == self.count():
+        if len(self.uuids) == len(self._collect_mod_uuids_from_view()):
             # Update list with the number of items
             logger.debug(
                 f"Emitting {self.list_type} list update signal after rows removed [{self.count()}]"
             )
             self.list_update_signal.emit(str(self.count()))
+        if self.list_type == "Active":
+            try:
+                self._update_all_section_counts()
+            except Exception:
+                pass
 
     def get_item_widget_at_index(self, idx: int) -> QWidget | None:
         item = self.item(idx)
@@ -2212,6 +2709,8 @@ class ModListWidget(QListWidget):
         the keyboard. Look up the mod's data by uuid
         """
         if current is not None:
+            if self._is_section_item(current):
+                return
             data = current.data(Qt.ItemDataRole.UserRole)
             self.mod_info_signal.emit(data["uuid"], current)
 
@@ -2224,6 +2723,8 @@ class ModListWidget(QListWidget):
         it so that mod info is updated as expected.
         """
         if current is not None:
+            if self._is_section_item(current):
+                return
             data = current.data(Qt.ItemDataRole.UserRole)
             self.mod_info_signal.emit(data["uuid"], current)
             mod_info = self.metadata_manager.internal_local_metadata[data["uuid"]]
@@ -2237,11 +2738,17 @@ class ModListWidget(QListWidget):
         """
         Method to handle double clicking on a row.
         """
-        # widget = ModListItemInner = self.itemWidget(item)
+        # If the item is a separator, toggle expand/collapse instead of move
+        if item is not None and self._is_section_item(item):
+            self._toggle_section_collapsed(item)
+            return
+        # Otherwise, treat as normal mod double-click
         self.key_press_signal.emit("DoubleClick")
 
     def rebuild_item_widget_from_uuid(self, uuid: str) -> None:
-        item_index = self.uuids.index(uuid)
+        item_index = self._find_item_index_by_uuid(uuid)
+        if item_index < 0:
+            return
         item = self.item(item_index)
         logger.debug(f"Rebuilding widget for item {uuid} at index {item_index}")
         # Destroy the item's previous widget immediately. Recreate if the item is visible.
@@ -2305,7 +2812,7 @@ class ModListWidget(QListWidget):
             latest_save_ids = None
 
         for uuid, mod_errors in package_id_to_errors.items():
-            current_mod_index = self.uuids.index(uuid)
+            current_mod_index = self._find_item_index_by_uuid(uuid)
             current_item = self.item(current_mod_index)
             if current_item is None:
                 continue
@@ -2696,13 +3203,20 @@ class ModListWidget(QListWidget):
         else:  # ...unless we don't have mods, at which point reenable updates and exit
             self.setUpdatesEnabled(True)
             return
+
+        # Note: do NOT auto-apply persisted separators here to avoid leaking
+        # separators between different imported modlists. Import/export will
+        # explicitly apply separators when appropriate.
+
         # Enable updates and repaint
         self.setUpdatesEnabled(True)
         self.repaint()
 
     def toggle_warning(self, packageid: str, uuid: str) -> None:
         logger.debug(f"Toggled warning icon for: {packageid}")
-        current_mod_index = self.uuids.index(uuid)
+        current_mod_index = self._find_item_index_by_uuid(uuid)
+        if current_mod_index < 0:
+            return
         item = self.item(current_mod_index)
         item_data = item.data(Qt.ItemDataRole.UserRole)
         if packageid not in self.ignore_warning_list:
@@ -2733,14 +3247,18 @@ class ModListWidget(QListWidget):
         self.recalculate_warnings_signal.emit()
 
     def change_mod_color(self, uuid: str, new_color: QColor) -> None:
-        current_mod_index = self.uuids.index(uuid)
+        current_mod_index = self._find_item_index_by_uuid(uuid)
+        if current_mod_index < 0:
+            return
         item = self.item(current_mod_index)
         item_data = item.data(Qt.ItemDataRole.UserRole)
         item_data["mod_color"] = new_color
         item.setData(Qt.ItemDataRole.UserRole, item_data)
 
     def reset_mod_color(self, uuid: str) -> None:
-        current_mod_index = self.uuids.index(uuid)
+        current_mod_index = self._find_item_index_by_uuid(uuid)
+        if current_mod_index < 0:
+            return
         item = self.item(current_mod_index)
         item_data = item.data(Qt.ItemDataRole.UserRole)
         item_data["mod_color"] = None
@@ -3009,6 +3527,7 @@ class ModsPanel(QWidget):
         self.active_mods_search_layout.addWidget(
             self.active_mods_search_mode_filter_button
         )
+        # Separator actions now available in context menu; removed top-level button
         self.active_mods_search_layout.addWidget(self.active_mods_search, 45)
         self.active_mods_search_layout.addWidget(self.active_mods_search_filter, 70)
         # Active mods list Errors/warnings widgets
@@ -3366,6 +3885,8 @@ class ModsPanel(QWidget):
     def on_active_mods_list_updated(self, count: str) -> None:
         self.mod_list_updated(count=count, list_type="Active")
 
+    # on_add_active_separator removed; add via item context menu instead
+
     def on_active_mods_search(self, pattern: str) -> None:
         self.signal_search_and_filters(
             list_type="Active",
@@ -3458,7 +3979,11 @@ class ModsPanel(QWidget):
 
         # Apply filtering based on the selected type
         for uuid in mod_list.uuids:
-            item = mod_list.item(mod_list.uuids.index(uuid))
+            if list_type == "Active":
+                idx = self.active_mods_list._find_item_index_by_uuid(uuid)
+                item = self.active_mods_list.item(idx) if idx >= 0 else None
+            else:
+                item = mod_list.item(mod_list.uuids.index(uuid))
             item_data = item.data(Qt.ItemDataRole.UserRole)
 
             # Determine the mod type
@@ -3485,9 +4010,14 @@ class ModsPanel(QWidget):
 
     def on_mod_deleted(self, uuid: str) -> None:
         if uuid in self.active_mods_list.uuids:
-            index = self.active_mods_list.uuids.index(uuid)
-            self.active_mods_list.takeItem(index)
-            self.active_mods_list.uuids.pop(index)
+            # Remove by visual index to ignore separators
+            index = self.active_mods_list._find_item_index_by_uuid(uuid)
+            if index >= 0:
+                self.active_mods_list.takeItem(index)
+            try:
+                self.active_mods_list.uuids.remove(uuid)
+            except ValueError:
+                pass
             self.update_count(list_type="Active")
         elif uuid in self.inactive_mods_list.uuids:
             index = self.inactive_mods_list.uuids.index(uuid)
@@ -3643,17 +4173,19 @@ class ModsPanel(QWidget):
         # Filter the list using any search and filter state
         num_filtered = 0
         num_unfiltered = 0
-        uuid_to_index = {u: i for i, u in enumerate(uuids)}
         for uuid in uuids:
-            item = (
-                self.active_mods_list.item(uuid_to_index[uuid])
-                if list_type == "Active"
-                else self.inactive_mods_list.item(uuid_to_index[uuid])
-            )
+            if list_type == "Active":
+                idx = self.active_mods_list._find_item_index_by_uuid(uuid)
+                item = self.active_mods_list.item(idx) if idx >= 0 else None
+            else:
+                item = self.inactive_mods_list.item(uuids.index(uuid))
             if item is None:
                 continue
             item_data = item.data(Qt.ItemDataRole.UserRole)
             metadata = self.metadata_manager.internal_local_metadata[uuid]
+            if list_type == "Active" and isinstance(item_data, dict) and item_data.get("hidden_by_section"):
+                item.setHidden(True)
+                continue
             if pattern != "":
                 filters_active = True
             # Hide invalid items if enabled in settings
@@ -3715,7 +4247,7 @@ class ModsPanel(QWidget):
                     item_data["hidden_by_filter"] = False
                     num_unfiltered += 1
             else:
-                if item_filtered and item.isHidden():
+                if item_filtered and item.isHidden() and not (isinstance(item_data, dict) and item_data.get("hidden_by_section")):
                     item.setHidden(False)
                     item_data["hidden_by_filter"] = False
                     num_unfiltered += 1
@@ -3868,11 +4400,11 @@ class ModsPanel(QWidget):
         num_filtered = 0
         num_unfiltered = 0
         for uuid in uuids:
-            item = (
-                self.active_mods_list.item(uuids.index(uuid))
-                if list_type == "Active"
-                else self.inactive_mods_list.item(uuids.index(uuid))
-            )
+            if list_type == "Active":
+                idx = self.active_mods_list._find_item_index_by_uuid(uuid)
+                item = self.active_mods_list.item(idx) if idx >= 0 else None
+            else:
+                item = self.inactive_mods_list.item(uuids.index(uuid))
             if item is None:
                 continue
             item_data = item.data(Qt.ItemDataRole.UserRole)

@@ -2782,6 +2782,45 @@ An alternative updated mod is recommended:
 {alternative}</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Rename</source>
+        <translation>Rename</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>Delete</translation>
+    </message>
+    <message>
+        <source>Rename separator</source>
+        <translation>Rename separator</translation>
+    </message>
+    <message>
+        <source>Enter a new name:</source>
+        <translation>Enter a new name:</translation>
+    </message>
+    <message>
+        <source>Add separator above</source>
+        <translation>Add separator above</translation>
+    </message>
+    <message>
+        <source>Add separator below</source>
+        <translation>Add separator below</translation>
+    </message>
+    <message>
+        <source>Add separator</source>
+        <translation>Add separator</translation>
+    </message>
+    <message>
+        <source>Enter a name for the separator:</source>
+        <translation>Enter a name for the separator:</translation>
+    </message>
+</context>
+<context>
+    <name>SectionHeaderWidget</name>
+    <message>
+        <source>Expand/Collapse section</source>
+        <translation>Expand/Collapse section</translation>
+    </message>
 </context>
 <context>
     <name>ModUpdaterPrompt</name>

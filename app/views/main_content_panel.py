@@ -435,16 +435,52 @@ class MainContent(QObject):
             iml.setFocus()
             if not iml.selectedIndexes():
                 iml.setCurrentRow(self.___get_relative_middle(iml))
-            item = iml.selectedItems()[0]
-            data = item.data(Qt.ItemDataRole.UserRole)
-            uuid = data["uuid"]
-            self.__mod_list_slot(uuid, cast(CustomListWidgetItem, item))
+            # Prefer a selected non-separator item; else scan for nearest
+            item = None
+            for it in iml.selectedItems():
+                d = it.data(Qt.ItemDataRole.UserRole)
+                if isinstance(d, dict) and d.get("type") == "separator":
+                    continue
+                item = it
+                break
+            if item is None:
+                # Find nearest non-separator from currentRow
+                start = iml.currentRow()
+                if start < 0:
+                    start = 0
+                # Search upwards then downwards
+                found = None
+                for r in range(start, -1, -1):
+                    it = iml.item(r)
+                    d = it.data(Qt.ItemDataRole.UserRole)
+                    if not (isinstance(d, dict) and d.get("type") == "separator"):
+                        found = it
+                        break
+                if found is None:
+                    for r in range(start, iml.count()):
+                        it = iml.item(r)
+                        d = it.data(Qt.ItemDataRole.UserRole)
+                        if not (isinstance(d, dict) and d.get("type") == "separator"):
+                            found = it
+                            break
+                item = found
+            if item is not None:
+                data = item.data(Qt.ItemDataRole.UserRole)
+                uuid = data["uuid"]
+                self.__mod_list_slot(uuid, cast(CustomListWidgetItem, item))
 
         elif key == "Return" or key == "Space" or key == "DoubleClick":
             # TODO: graphical bug where if you hold down the key, items are
             # inserted too quickly and become empty items
 
-            items_to_move = aml.selectedItems().copy()
+            # Filter out separators (which do not have uuid)
+            all_selected = aml.selectedItems().copy()
+            items_to_move = []
+            for it in all_selected:
+                d = it.data(Qt.ItemDataRole.UserRole)
+                if isinstance(d, dict) and d.get("type") == "separator":
+                    continue
+                items_to_move.append(it)
             if items_to_move:
                 first_selected = sorted(aml.row(i) for i in items_to_move)[0]
 
@@ -1537,6 +1573,18 @@ class MainContent(QObject):
             ) = metadata.get_mods_from_list(mod_list=file_path)
             logger.info("Got new mods according to imported XML")
             self._insert_data_into_lists(active_mods_uuids, inactive_mods_uuids)
+            # Try to load sidecar separators JSON
+            try:
+                from pathlib import Path as _P
+                p = _P(file_path)
+                sidecar = p.with_suffix(p.suffix + ".sections.json")
+                if sidecar.exists():
+                    data = json.loads(sidecar.read_text(encoding="utf-8"))
+                    entries = data.get("active_sections", [])
+                    self.mods_panel.active_mods_list.apply_separator_entries(entries)
+                    logger.info(f"Applied {len(entries)} separators from sidecar file")
+            except Exception:
+                logger.exception("Failed to apply separators from sidecar JSON")
             # If we have duplicate mods, prompt user
             if (
                 self.settings_controller.settings.duplicate_mods_warning
@@ -1601,9 +1649,21 @@ class MainContent(QObject):
                     f"Saving generated ModsConfig.xml style list to selected path: {file_path}"
                 )
                 if not file_path.endswith(".xml"):
-                    json_to_xml_write(mods_config_data, file_path + ".xml")
+                    xml_path = file_path + ".xml"
+                    json_to_xml_write(mods_config_data, xml_path)
                 else:
-                    json_to_xml_write(mods_config_data, file_path)
+                    xml_path = file_path
+                    json_to_xml_write(mods_config_data, xml_path)
+                # Write sidecar separators JSON next to the XML
+                try:
+                    from pathlib import Path as _P
+                    sidecar = _P(xml_path).with_suffix(_P(xml_path).suffix + ".sections.json")
+                    active_sections = self.mods_panel.active_mods_list.get_separator_entries()
+                    payload = {"active_sections": active_sections}
+                    sidecar.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                    logger.info(f"Saved separators sidecar: {sidecar}")
+                except Exception:
+                    logger.exception("Failed to write separators sidecar JSON")
             except Exception:
                 dialogue.show_fatal_error(
                     title=self.tr("Failed to export to file"),

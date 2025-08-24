@@ -2898,6 +2898,45 @@ An alternative updated mod is recommended:
         <source>Reset mod color</source>
         <translation>重置模组颜色</translation>
     </message>
+    <message>
+        <source>Rename</source>
+        <translation>重命名</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>Rename separator</source>
+        <translation>重命名分隔符</translation>
+    </message>
+    <message>
+        <source>Enter a new name:</source>
+        <translation>输入新名称：</translation>
+    </message>
+    <message>
+        <source>Add separator above</source>
+        <translation>在上方添加分隔符</translation>
+    </message>
+    <message>
+        <source>Add separator below</source>
+        <translation>在下方添加分隔符</translation>
+    </message>
+    <message>
+        <source>Add separator</source>
+        <translation>添加分隔符</translation>
+    </message>
+    <message>
+        <source>Enter a name for the separator:</source>
+        <translation>输入分隔符名称：</translation>
+    </message>
+</context>
+<context>
+    <name>SectionHeaderWidget</name>
+    <message>
+        <source>Expand/Collapse section</source>
+        <translation>展开/折叠分区</translation>
+    </message>
 </context>
 <context>
     <name>ModUpdaterPrompt</name>
