@@ -2921,11 +2921,13 @@ class ModListWidget(QListWidget):
                 }
 
                 # Check loadTheseBefore
+                current_mod_pos = self.uuids.index(uuid)
+
                 for load_this_before in mod_data.get("loadTheseBefore", []):
                     if (
                         load_this_before[1]
                         and load_this_before[0] in packageid_to_uuid
-                        and current_mod_index
+                        and current_mod_pos
                         <= self.uuids.index(packageid_to_uuid[load_this_before[0]])
                     ):
                         assert isinstance(mod_errors["load_before_violations"], set)
@@ -2936,7 +2938,7 @@ class ModListWidget(QListWidget):
                     if (
                         load_this_after[1]
                         and load_this_after[0] in packageid_to_uuid
-                        and current_mod_index
+                        and current_mod_pos
                         >= self.uuids.index(packageid_to_uuid[load_this_after[0]])
                     ):
                         assert isinstance(mod_errors["load_after_violations"], set)
