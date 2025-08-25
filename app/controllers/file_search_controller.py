@@ -70,13 +70,6 @@ class SearchWorker(QThread):
         self.memory_warning_threshold = 0.85  # 85% of available memory
         self.last_memory_check = 0
         self.memory_warning_shown = False
-
-        # Set thread priority to lower to avoid UI freezing
-        if not self.isRunning():
-            logger.warning("Thread is not running. Skipping priority setting.")
-            return
-        self.setPriority(QThread.Priority.LowPriority)
-
         # Validate regex pattern if using regex
         if options.get("use_regex", False):
             try:
@@ -84,8 +77,9 @@ class SearchWorker(QThread):
             except re.error as e:
                 logger.error(f"Invalid regex pattern: {e}")
                 self.error.emit(f"Invalid regex pattern: {e}")
-                # Force simple search if regex is invalid
-                self.options["algorithm"] = "simple search"
+                # Fall back to standard (non-regex) search and disable regex
+                self.options["algorithm"] = "standard search"
+                self.options["use_regex"] = False
 
         # Automatically select the best search algorithm based on the collection size
         if "algorithm" in self.options and self.options["algorithm"] == "auto":
@@ -611,6 +605,10 @@ class SearchWorker(QThread):
 
     def run(self) -> None:
         try:
+            try:
+                self.setPriority(QThread.Priority.LowPriority)
+            except Exception as e:
+                logger.debug(f"Could not set thread priority: {e}")
             logger.info(f"Starting search with text: {self.pattern}")
             logger.info(f"Search options: {self.options}")
             logger.info(f"Search paths: {self.root_paths}")
@@ -624,7 +622,7 @@ class SearchWorker(QThread):
             self.stats.emit("Starting search...")
 
             # Get search method based on selected algorithm
-            algorithm = self.options.get("algorithm", "simple search")
+            algorithm = self.options.get("algorithm", "standard search")
 
             # If using regex, force pattern search
             if self.options.get("use_regex", False) and algorithm != "pattern search":
@@ -644,9 +642,9 @@ class SearchWorker(QThread):
             # Check if the method exists
             if not hasattr(self.searcher, method_name):
                 logger.warning(
-                    f"Search method {method_name} not found, falling back to simple_search"
+                    f"Search method {method_name} not found, falling back to standard_search"
                 )
-                method_name = "simple_search"
+                method_name = "standard_search"
 
             search_method = getattr(self.searcher, method_name)
             logger.info(f"Using search method: {algorithm} ({method_name})")
@@ -827,7 +825,7 @@ class FileSearchController(QObject):
         self._on_search_start()
         self.dialog.search_button.setEnabled(False)
         self.dialog.search_button.setStyleSheet(
-            "font-weight: bold; background-color: nornal;"
+            "font-weight: bold; background-color: normal;"
         )
         self.dialog.stop_button.setEnabled(True)
         self.dialog.stop_button.setStyleSheet(
